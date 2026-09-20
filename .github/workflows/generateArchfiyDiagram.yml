@@ -37,26 +37,7 @@ jobs:
 
       - name: Check Archify
         run: |
-          npx --prefix /tmp/archify archify doctor
-
-      - name: Validate Archify specification
-        run: |
-          npx --prefix /tmp/archify archify \
-            validate \
-            sequence \
-            diagrams/todo-module.sequence.json \
-            --quality showcase \
-            --json
-            
-      - name: Render Todo sequence diagram
-        run: |
-          npx --prefix /tmp/archify archify \
-            deliver \
-            sequence \
-            diagrams/todo-module.sequence.json \
-            dist/todo-module-sequence.html \
-            --quality showcase \
-            --json
+          node /tmp/archify/archify/bin/archify.mjs doctor
 
       - name: Create Todo sequence specification
         run: |
@@ -292,7 +273,7 @@ jobs:
 
       - name: Validate Archify specification
         run: |
-          node /tmp/archify/bin/archify.mjs \
+          node /tmp/archify/archify/bin/archify.mjs \
             validate \
             sequence \
             diagrams/todo-module.sequence.json \
@@ -301,7 +282,7 @@ jobs:
 
       - name: Render Todo sequence diagram
         run: |
-          node /tmp/archify/bin/archify.mjs \
+          node /tmp/archify/archify/bin/archify.mjs \
             deliver \
             sequence \
             diagrams/todo-module.sequence.json \
@@ -312,7 +293,7 @@ jobs:
       - name: Create release package
         run: |
           cp diagrams/todo-module.sequence.json dist/
-          cp /tmp/archify/README.md dist/ARCHIFY-INFO.md
+          cp /tmp/archify/archify/README.md dist/ARCHIFY-INFO.md
 
           cd dist
           zip -r todo-module-sequence.zip \

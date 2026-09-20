@@ -1,0 +1,321 @@
+name: Generate Todo sequence diagram
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.0.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  generate-todo-sequence:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current release
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download Archify
+        run: |
+          git clone --depth 1 https://github.com/tt-a1i/archify.git /tmp/archify
+
+      - name: Check Archify
+        run: |
+          node /tmp/archify/bin/archify.mjs doctor
+
+      - name: Create Todo sequence specification
+        run: |
+          mkdir -p diagrams dist
+
+          cat > diagrams/todo-module.sequence.json <<'JSON'
+          {
+            "schema_version": 1,
+            "diagram_type": "sequence",
+            "meta": {
+              "title": "TT Vapor API Todo Module Sequence",
+              "locale": "en",
+              "viewBox": [1080, 900],
+              "column_fit": "spread",
+              "animation": "trace",
+              "quality_profile": "showcase",
+              "views": [
+                {
+                  "id": "list-todos",
+                  "label": "List todos",
+                  "focus": ["client", "routes", "controller", "fluent", "postgres"],
+                  "note": "The client requests all Todo records and the Vapor API reads them from PostgreSQL."
+                },
+                {
+                  "id": "create-todo",
+                  "label": "Create todo",
+                  "focus": ["client", "routes", "controller", "model", "fluent", "postgres"],
+                  "note": "The API decodes the request body into a Todo model and persists it through Fluent."
+                },
+                {
+                  "id": "delete-todo",
+                  "label": "Delete todo",
+                  "focus": ["client", "routes", "controller", "fluent", "postgres"],
+                  "note": "The API finds the Todo by ID, deletes it, and returns an HTTP status."
+                }
+              ]
+            },
+            "participants": [
+              {
+                "id": "client",
+                "type": "external",
+                "label": "Client",
+                "sublabel": "HTTP client"
+              },
+              {
+                "id": "routes",
+                "type": "backend",
+                "label": "Vapor Routes",
+                "sublabel": "routes.swift"
+              },
+              {
+                "id": "controller",
+                "type": "backend",
+                "label": "TodoController",
+                "sublabel": "CRUD handlers"
+              },
+              {
+                "id": "model",
+                "type": "backend",
+                "label": "Todo Model",
+                "sublabel": "Fluent Model + Content"
+              },
+              {
+                "id": "fluent",
+                "type": "backend",
+                "label": "Fluent ORM",
+                "sublabel": "query and persistence"
+              },
+              {
+                "id": "postgres",
+                "type": "database",
+                "label": "PostgreSQL",
+                "sublabel": "todos table"
+              }
+            ],
+            "segments": [
+              {
+                "from": 150,
+                "to": 330,
+                "label": "List todos"
+              },
+              {
+                "from": 350,
+                "to": 570,
+                "label": "Create todo"
+              },
+              {
+                "from": 590,
+                "to": 830,
+                "label": "Delete todo"
+              }
+            ],
+            "messages": [
+              {
+                "id": "list-request",
+                "from": "client",
+                "to": "routes",
+                "y": 180,
+                "label": "GET /todos",
+                "variant": "emphasis"
+              },
+              {
+                "id": "list-handler",
+                "from": "routes",
+                "to": "controller",
+                "y": 215,
+                "label": "index(req)",
+                "variant": "default"
+              },
+              {
+                "id": "list-query",
+                "from": "controller",
+                "to": "fluent",
+                "y": 250,
+                "label": "Todo.query().all()",
+                "variant": "default"
+              },
+              {
+                "id": "list-db",
+                "from": "fluent",
+                "to": "postgres",
+                "y": 285,
+                "label": "SELECT * FROM todos",
+                "variant": "default"
+              },
+              {
+                "id": "list-result",
+                "from": "postgres",
+                "to": "fluent",
+                "y": 320,
+                "label": "Todo rows",
+                "variant": "return"
+              },
+              {
+                "id": "list-response",
+                "from": "controller",
+                "to": "client",
+                "y": 345,
+                "label": "200 + [Todo]",
+                "variant": "return"
+              },
+              {
+                "id": "create-request",
+                "from": "client",
+                "to": "routes",
+                "y": 380,
+                "label": "POST /todos + JSON",
+                "variant": "emphasis"
+              },
+              {
+                "id": "create-handler",
+                "from": "routes",
+                "to": "controller",
+                "y": 415,
+                "label": "create(req)",
+                "variant": "default"
+              },
+              {
+                "id": "decode-model",
+                "from": "controller",
+                "to": "model",
+                "y": 450,
+                "label": "decode Todo.self",
+                "variant": "default"
+              },
+              {
+                "id": "save-query",
+                "from": "model",
+                "to": "fluent",
+                "y": 485,
+                "label": "todo.save(on: req.db)",
+                "variant": "default"
+              },
+              {
+                "id": "insert-db",
+                "from": "fluent",
+                "to": "postgres",
+                "y": 520,
+                "label": "INSERT INTO todos",
+                "variant": "default"
+              },
+              {
+                "id": "create-response",
+                "from": "controller",
+                "to": "client",
+                "y": 555,
+                "label": "200 + Todo",
+                "variant": "return"
+              },
+              {
+                "id": "delete-request",
+                "from": "client",
+                "to": "routes",
+                "y": 620,
+                "label": "DELETE /todos/:todoID",
+                "variant": "emphasis"
+              },
+              {
+                "id": "delete-handler",
+                "from": "routes",
+                "to": "controller",
+                "y": 655,
+                "label": "delete(req)",
+                "variant": "default"
+              },
+              {
+                "id": "find-todo",
+                "from": "controller",
+                "to": "fluent",
+                "y": 690,
+                "label": "Todo.find(todoID)",
+                "variant": "default"
+              },
+              {
+                "id": "delete-db",
+                "from": "fluent",
+                "to": "postgres",
+                "y": 725,
+                "label": "DELETE FROM todos",
+                "variant": "default"
+              },
+              {
+                "id": "delete-response",
+                "from": "controller",
+                "to": "client",
+                "y": 780,
+                "label": "200 OK / 404 Not Found",
+                "variant": "return"
+              }
+            ]
+          }
+          JSON
+
+      - name: Validate Archify specification
+        run: |
+          node /tmp/archify/bin/archify.mjs \
+            validate \
+            sequence \
+            diagrams/todo-module.sequence.json \
+            --quality showcase \
+            --json
+
+      - name: Render Todo sequence diagram
+        run: |
+          node /tmp/archify/bin/archify.mjs \
+            deliver \
+            sequence \
+            diagrams/todo-module.sequence.json \
+            dist/todo-module-sequence.html \
+            --quality showcase \
+            --json
+
+      - name: Create release package
+        run: |
+          cp diagrams/todo-module.sequence.json dist/
+          cp /tmp/archify/README.md dist/ARCHIFY-INFO.md
+
+          cd dist
+          zip -r todo-module-sequence.zip \
+            todo-module-sequence.html \
+            todo-module.sequence.json \
+            ARCHIFY-INFO.md
+
+      - name: Determine release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload diagram to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: Release ${{ steps.release_tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/todo-module-sequence.html
+            dist/todo-module-sequence.zip

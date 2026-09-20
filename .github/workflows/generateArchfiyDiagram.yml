@@ -30,13 +30,23 @@ jobs:
         with:
           node-version: 20
 
-      - name: Download Archify
+            - name: Download Archify
         run: |
           git clone --depth 1 https://github.com/tt-a1i/archify.git /tmp/archify
+          npm install --prefix /tmp/archify
 
       - name: Check Archify
         run: |
-          node /tmp/archify/bin/archify.mjs doctor
+          npx --prefix /tmp/archify archify doctor
+
+      - name: Validate Archify specification
+        run: |
+          npx --prefix /tmp/archify archify \
+            validate \
+            sequence \
+            diagrams/todo-module.sequence.json \
+            --quality showcase \
+            --json
 
       - name: Create Todo sequence specification
         run: |

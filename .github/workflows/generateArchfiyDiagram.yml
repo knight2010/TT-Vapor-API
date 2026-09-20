@@ -30,10 +30,10 @@ jobs:
         with:
           node-version: 20
 
-            - name: Download Archify
+      - name: Download Archify
         run: |
           git clone --depth 1 https://github.com/tt-a1i/archify.git /tmp/archify
-          npm install --prefix /tmp/archify
+          npm install --prefix /tmp/archify/archify
 
       - name: Check Archify
         run: |

@@ -47,6 +47,16 @@ jobs:
             diagrams/todo-module.sequence.json \
             --quality showcase \
             --json
+            
+      - name: Render Todo sequence diagram
+        run: |
+          npx --prefix /tmp/archify archify \
+            deliver \
+            sequence \
+            diagrams/todo-module.sequence.json \
+            dist/todo-module-sequence.html \
+            --quality showcase \
+            --json
 
       - name: Create Todo sequence specification
         run: |

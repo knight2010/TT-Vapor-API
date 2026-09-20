@@ -1,0 +1,234 @@
+name: Pull Image and Run Playwright Tests
+
+run-name: Playwright E2E tests for ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Docker image to test"
+        required: true
+        default: "ghcr.io/knight2010/tt-vapor-api:latest"
+        type: string
+
+      release_tag:
+        description: "Release tag, for example v1.0.0"
+        required: true
+        default: "v1.0.0"
+        type: string
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  playwright-test:
+    name: Pull image, run application and test with Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      IMAGE: ${{ inputs.image || 'ghcr.io/knight2010/tt-vapor-api:latest' }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: 5432
+      DATABASE_USERNAME: vapor_username
+      DATABASE_PASSWORD: vapor_password
+      DATABASE_NAME: vapor_database
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vapor_username
+          POSTGRES_PASSWORD: vapor_password
+          POSTGRES_DB: vapor_database
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U vapor_username -d vapor_database"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull application image
+        run: |
+          echo "Pulling image: $IMAGE"
+          docker pull "$IMAGE"
+
+      - name: Start application container
+        run: |
+          docker run -d \
+            --name tt-vapor-api \
+            --network host \
+            -e DATABASE_HOST="$DATABASE_HOST" \
+            -e DATABASE_PORT="$DATABASE_PORT" \
+            -e DATABASE_USERNAME="$DATABASE_USERNAME" \
+            -e DATABASE_PASSWORD="$DATABASE_PASSWORD" \
+            -e DATABASE_NAME="$DATABASE_NAME" \
+            "$IMAGE"
+
+      - name: Wait for application to become ready
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/ > /dev/null; then
+              echo "Application is ready"
+              exit 0
+            fi
+
+            echo "Waiting for application..."
+            sleep 2
+          done
+
+          echo "Application did not become ready"
+          docker logs tt-vapor-api
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        run: |
+          npm init --yes
+          npm install --no-save @playwright/test
+          npx playwright install --with-deps chromium
+
+      - name: Create Playwright configuration
+        run: |
+          mkdir -p tests/e2e
+
+          cat > playwright.config.js <<'EOF'
+          const { defineConfig } = require("@playwright/test");
+
+          module.exports = defineConfig({
+            testDir: "./tests/e2e",
+
+            reporter: [
+              ["list"],
+              [
+                "html",
+                {
+                  outputFolder: "playwright-report",
+                  open: "never"
+                }
+              ],
+              [
+                "junit",
+                {
+                  outputFile: "test-results/results.xml"
+                }
+              ]
+            ],
+
+            use: {
+              baseURL: "http://127.0.0.1:8080",
+              headless: true,
+              trace: "retain-on-failure"
+            }
+          });
+          EOF
+
+      - name: Create Playwright tests
+        run: |
+          cat > tests/e2e/api.spec.js <<'EOF'
+          const { test, expect } = require("@playwright/test");
+
+          test("GET / returns the application health response", async ({ page }) => {
+            const response = await page.goto("/");
+
+            expect(response.ok()).toBeTruthy();
+            await expect(page.locator("body")).toHaveText("It works!");
+          });
+
+          test("GET /hello returns the greeting", async ({ page }) => {
+            const response = await page.goto("/hello");
+
+            expect(response.ok()).toBeTruthy();
+            await expect(page.locator("body")).toHaveText("Hello, world!");
+          });
+          EOF
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Show application logs when tests fail
+        if: failure()
+        run: docker logs tt-vapor-api
+
+      - name: Package Playwright test results
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p release-assets
+
+          if [ -d "playwright-report" ]; then
+            cp -R playwright-report release-assets/
+          fi
+
+          if [ -d "test-results" ]; then
+            cp -R test-results release-assets/
+          fi
+
+          if [ -d "release-assets/playwright-report" ] || \
+             [ -d "release-assets/test-results" ]; then
+            tar -czf \
+              "release-assets/playwright-results-${RELEASE_TAG}.tar.gz" \
+              -C release-assets \
+              playwright-report \
+              test-results 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: warn
+
+      - name: Create GitHub Release and upload test results
+        if: >-
+          always() &&
+          (
+            startsWith(github.ref, 'refs/tags/') ||
+            github.event_name == 'workflow_dispatch'
+          )
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Playwright test results ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          body: |
+            ## Playwright Test Results
+
+            Docker image tested:
+
+            `${{ env.IMAGE }}`
+
+            The Playwright HTML report and JUnit test results
+            are included in the attached archive.
+          files: |
+            release-assets/playwright-results-${{ env.RELEASE_TAG }}.tar.gz
+
+      - name: Stop application container
+        if: always()
+        run: |
+          docker rm --force tt-vapor-api || true

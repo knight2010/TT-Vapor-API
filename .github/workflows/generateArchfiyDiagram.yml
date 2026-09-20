@@ -293,7 +293,7 @@ jobs:
       - name: Create release package
         run: |
           cp diagrams/todo-module.sequence.json dist/
-          cp /tmp/archify/archify/README.md dist/ARCHIFY-INFO.md
+          cp /tmp/archify/README.md dist/ARCHIFY-INFO.md
 
           cd dist
           zip -r todo-module-sequence.zip \

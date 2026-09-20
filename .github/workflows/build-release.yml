@@ -1,48 +1,233 @@
-name: Build TT-Vapor-API and Upload to Release
-run-name: Build docker image & export tar to Release
+name: Build, Test and Release TT-Vapor-API
+
+run-name: Build Docker image, run Playwright tests and publish release
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: # 支持手动触发
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v1.0.0'
+        required: true
+        type: string
 
 permissions:
-  contents: write # 创建Release、上传附件必须权限
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/tt-vapor-api
 
 jobs:
-  build:
+  build-test-release:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: $VERSION"
+            echo "Expected format: v1.0.0"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize image name
+        run: |
+          IMAGE_NAME="$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${{ steps.release.outputs.version }}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image by docker compose
-        run: docker compose build
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Retag image with version tag
+      - name: Build Vapor Docker image
         run: |
-          # 原compose构建出来的镜像是 tt-vapor-api:latest
-          docker tag tt-vapor-api:latest tt-vapor-api:${{ github.ref_name }}
+          docker compose build app
 
-      - name: Export image to tar package
+      - name: Start PostgreSQL
         run: |
-          docker save tt-vapor-api:${{ github.ref_name }} -o tt-vapor-api-${{ github.ref_name }}.tar
-          # 打包docker-compose.yml一起作为发布附件
-          zip tt-vapor-api-compose-${{ github.ref_name }}.zip docker-compose.yml
+          docker compose up -d db
 
-      - name: Create Release and upload assets
+      - name: Wait for PostgreSQL
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            if docker compose exec -T db \
+              pg_isready -U vapor_username -d vapor_database; then
+              echo "PostgreSQL is ready"
+              exit 0
+            fi
+
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+          docker compose logs db
+          exit 1
+
+      - name: Run Vapor migrations
+        run: |
+          docker compose run --rm migrate
+
+      - name: Start Vapor application
+        run: |
+          docker compose up -d app
+
+      - name: Wait for Vapor application
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/; then
+              echo
+              echo "Vapor application is ready"
+              exit 0
+            fi
+
+            echo "Waiting for Vapor application..."
+            sleep 2
+          done
+
+          docker compose logs app
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install --no-save @playwright/test
+          npx playwright install --with-deps chromium
+
+      - name: Create Playwright configuration
+        run: |
+          mkdir -p tests/e2e
+
+          cat > playwright.config.js <<'EOF'
+          const { defineConfig } = require('@playwright/test');
+
+          module.exports = defineConfig({
+            testDir: './tests/e2e',
+            timeout: 30000,
+            use: {
+              baseURL: 'http://127.0.0.1:8080',
+              headless: true
+            },
+            reporter: 'list'
+          });
+          EOF
+
+          cat > tests/e2e/routes.spec.js <<'EOF'
+          const { test, expect } = require('@playwright/test');
+
+          test('GET / returns It works!', async ({ page }) => {
+            const response = await page.goto('/');
+
+            expect(response.ok()).toBeTruthy();
+            await expect(page.locator('body')).toHaveText('It works!');
+          });
+
+          test('GET /hello returns Hello, world!', async ({ page }) => {
+            const response = await page.goto('/hello');
+
+            expect(response.ok()).toBeTruthy();
+            await expect(page.locator('body')).toHaveText('Hello, world!');
+          });
+          EOF
+
+      - name: Run Playwright tests
+        run: |
+          npx playwright test
+
+      - name: Show Docker logs if tests fail
+        if: failure()
+        run: |
+          docker compose logs app db
+
+      - name: Tag image for GHCR
+        run: |
+          docker tag \
+            tt-vapor-api:latest \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+
+          docker tag \
+            tt-vapor-api:latest \
+            "${IMAGE_NAME}:latest"
+
+      - name: Push image to GHCR
+        run: |
+          docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker push "${IMAGE_NAME}:latest"
+
+      - name: Export Docker image to tar
+        run: |
+          docker save "${IMAGE_NAME}:${IMAGE_TAG}" \
+            -o "tt-vapor-api-${IMAGE_TAG}.tar"
+
+      - name: Package docker-compose.yml
+        run: |
+          zip \
+            "tt-vapor-api-compose-${IMAGE_TAG}.zip" \
+            docker-compose.yml
+
+      - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ github.ref_name }}
+          tag_name: ${{ steps.release.outputs.version }}
+          name: Release ${{ steps.release.outputs.version }}
           body: |
-            ## TT-Vapor-API Release ${{ github.ref_name }}
-            - Image tar包：`tt-vapor-api-${{ github.ref_name }}.tar`
-              使用方式：`docker load -i tt-vapor-api-${{ github.ref_name }}.tar`
-            - compose压缩包：包含docker-compose.yml
+            ## TT-Vapor-API Release ${{ steps.release.outputs.version }}
+
+            ### Docker image
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository_owner }}/tt-vapor-api:${{ steps.release.outputs.version }}
+            ```
+
+            ### Docker tar package
+
+            ```bash
+            docker load -i tt-vapor-api-${{ steps.release.outputs.version }}.tar
+            ```
+
+            ### Tests
+
+            Playwright tested:
+
+            - `GET /`
+            - `GET /hello`
+
           files: |
-            tt-vapor-api-${{ github.ref_name }}.tar
-            tt-vapor-api-compose-${{ github.ref_name }}.zip
+            tt-vapor-api-${{ steps.release.outputs.version }}.tar
+            tt-vapor-api-compose-${{ steps.release.outputs.version }}.zip
+
+      - name: Stop Docker services
+        if: always()
+        run: |
+          docker compose down -v

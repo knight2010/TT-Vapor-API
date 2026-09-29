@@ -1,0 +1,56 @@
+name: Start Codespace
+
+on:
+  workflow_dispatch:
+    inputs:
+      codespace_name: 'solid space telegram'
+        description: '要启动的 Codespace 名称 (例如: fluffy-space-umbrella-wvrg)'
+        required: true
+        type: string
+
+jobs:
+  start-instance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Target Codespace
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODESPACE_TOKEN }}
+        run: |
+          TARGET_NAME="${{ inputs.codespace_name }}"
+          echo "正在尝试启动 Codespace: $TARGET_NAME"
+
+          # 1. 检查是否存在该 Codespace
+          CURRENT_STATE=$(gh api "user/codespaces/$TARGET_NAME" --jq '.state' 2>/dev/null || echo "NOT_FOUND")
+
+          if [ "$CURRENT_STATE" = "NOT_FOUND" ]; then
+            echo "::error::未找到名为 '$TARGET_NAME' 的 Codespace，请检查名称是否正确。"
+            exit 1
+          fi
+
+          echo "当前状态: $CURRENT_STATE"
+
+          # 2. 如果已在运行中，直接退出
+          if [ "$CURRENT_STATE" = "Available" ]; then
+            echo "Codespace 已经在运行中！"
+            exit 0
+          fi
+
+          # 3. 调用 API 启动 Codespace
+          echo "发送启动请求..."
+          gh api -X POST "user/codespaces/$TARGET_NAME/start" > /dev/null
+
+          # 4. 轮询等待其完全启动（变为 Available）
+          echo "等待实例启动完毕..."
+          for i in {1..30}; do
+            STATE=$(gh api "user/codespaces/$TARGET_NAME" --jq '.state')
+            echo "状态检测 [$i/30]: $STATE"
+            if [ "$STATE" = "Available" ]; then
+              echo " Codespace 启动成功，已就绪！"
+              WEB_URL=$(gh api "user/codespaces/$TARGET_NAME" --jq '.web_url')
+              echo "访问地址: $WEB_URL"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "::warning::启动超时或状态未变为 Available，当前状态为: $STATE"

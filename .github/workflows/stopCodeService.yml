@@ -1,0 +1,54 @@
+name: Stop Specific Codespace
+
+on:
+  workflow_dispatch:
+    inputs:
+      codespace_name:
+        description: 'Codespace 唯一标识名称 (例如: curly-space-potato-7vvvv575g7fxr5v)'
+        required: true
+        default: 'solid-space-telegram-vjxgjqpq9jfpgq9'
+        type: string
+
+jobs:
+  stop-instance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stop Codespace
+        env:
+          GH_TOKEN: ${{ secrets.GH_CODESPACE_TOKEN }}
+        run: |
+          TARGET="${{ github.event.inputs.codespace_name }}"
+          echo "准备停止 Codespace: $TARGET"
+
+          # 1. 检查 Codespace 是否存在及其当前状态
+          STATE=$(gh api "user/codespaces/$TARGET" --jq '.state' 2>/dev/null || echo "NOT_FOUND")
+
+          if [ "$STATE" = "NOT_FOUND" ]; then
+            echo "::error::未找到名为 '$TARGET' 的 Codespace，请确认名称是否正确。"
+            exit 1
+          fi
+
+          echo "当前状态: $STATE"
+
+          # 2. 如果已经停止（Shutdown），直接退出
+          if [ "$STATE" = "Shutdown" ]; then
+            echo "实例已经处于停止状态，无需操作。"
+            exit 0
+          fi
+
+          # 3. 发送停止指令
+          echo "发送停止指令..."
+          gh codespace stop -c "$TARGET"
+
+          # 4. 轮询检查是否完全停止
+          for i in {1..15}; do
+            CURRENT_STATE=$(gh api "user/codespaces/$TARGET" --jq '.state')
+            echo "状态检测 [$i/15]: $CURRENT_STATE"
+            if [ "$CURRENT_STATE" = "Shutdown" ]; then
+              echo "Codespace 已成功停止！"
+              exit 0
+            fi
+            sleep 4
+          done
+
+          echo "::warning::停止请求已发出，但未在检测窗口内完全转为 Shutdown，当前状态: $CURRENT_STATE"

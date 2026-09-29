@@ -3,9 +3,10 @@ name: Start Codespace
 on:
   workflow_dispatch:
     inputs:
-      codespace_name: 'solid space telegram'
+      codespace_name:
         description: '要启动的 Codespace 名称 (例如: fluffy-space-umbrella-wvrg)'
         required: true
+        default: 'solid-space-telegram-vjxgjqpq9jfpgq9'
         type: string
 
 jobs:
